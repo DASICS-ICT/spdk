@@ -226,7 +226,7 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 		}
 		#ifdef RTE_ENABLE_DBCHECKER
 		pqpair->cmd_bus_addr = dbchecker_alloc_mtdt_generic(pqpair->cmd_bus_addr, queue_len,
-							     DMA_BIDIRECTIONAL, DEV_ID);
+							     DMA_BIDIRECTIONAL);
 		#endif
 		// printf("sq pa 0x%llx len 0x%llx\n", (unsigned long long)pqpair->cmd_bus_addr, (unsigned long long)queue_len);
 	}
@@ -255,7 +255,7 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 	}
 	#ifdef RTE_ENABLE_DBCHECKER
 	pqpair->cpl_bus_addr = dbchecker_alloc_mtdt_generic(pqpair->cpl_bus_addr, queue_len,
-						     DMA_BIDIRECTIONAL, DEV_ID);
+						     DMA_BIDIRECTIONAL);
 	#endif
 	// printf("cq pa 0x%llx, len 0x%llx\n", (unsigned long long)pqpair->cpl_bus_addr, (unsigned long long)queue_len);
 
@@ -1349,7 +1349,7 @@ nvme_pcie_prp_list_append(struct spdk_nvme_ctrlr *ctrlr, struct nvme_tracker *tr
 			seg_len = page_size - ((uintptr_t)virt_addr & page_mask);
 			#ifdef RTE_ENABLE_DBCHECKER
 			cmd->dptr.prp.prp1 = dbchecker_alloc_mtdt_generic(phys_addr, seg_len, 
-				spdk_nvme_pcie_get_dir(tr->req->cmd.opc), DEV_ID);
+				spdk_nvme_pcie_get_dir(tr->req->cmd.opc));
 			#else
 			cmd->dptr.prp.prp1 = phys_addr;
 			#endif
@@ -1364,7 +1364,7 @@ nvme_pcie_prp_list_append(struct spdk_nvme_ctrlr *ctrlr, struct nvme_tracker *tr
 			seg_len = page_size;
 			#ifdef RTE_ENABLE_DBCHECKER
 			tr->u.prp[i - 1] = dbchecker_alloc_mtdt_generic(phys_addr, seg_len, 
-				spdk_nvme_pcie_get_dir(tr->req->cmd.opc), DEV_ID);
+				spdk_nvme_pcie_get_dir(tr->req->cmd.opc));
 			#else
 			tr->u.prp[i - 1] = phys_addr;
 			#endif
@@ -1390,7 +1390,7 @@ nvme_pcie_prp_list_append(struct spdk_nvme_ctrlr *ctrlr, struct nvme_tracker *tr
 	} else {
 		#ifdef RTE_ENABLE_DBCHECKER
 		cmd->dptr.prp.prp2 = dbchecker_alloc_mtdt_generic(tr->prp_sgl_bus_addr, 
-			i * sizeof(uint64_t), DMA_TO_DEVICE, DEV_ID);
+			i * sizeof(uint64_t), DMA_TO_DEVICE);
 		#else
 		cmd->dptr.prp.prp2 = tr->prp_sgl_bus_addr;
 		#endif
