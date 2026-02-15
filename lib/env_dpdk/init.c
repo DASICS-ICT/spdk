@@ -21,6 +21,10 @@
 #include <rte_errno.h>
 #include <rte_vfio.h>
 
+#ifdef RTE_ENABLE_DBCHECKER
+	#include "rte_dbchecker.h"
+#endif
+
 #define SPDK_ENV_DPDK_DEFAULT_NAME		"spdk"
 #define SPDK_ENV_DPDK_DEFAULT_SHM_ID		-1
 #define SPDK_ENV_DPDK_DEFAULT_MEM_SIZE		-1
@@ -800,6 +804,10 @@ spdk_env_init(const struct spdk_env_opts *opts_user)
 		return -rte_errno;
 	}
 
+	#ifdef RTE_ENABLE_DBCHECKER
+		dbchecker_module_init_hook();
+	#endif
+
 #ifdef __FreeBSD__
 	/**
 	 * DPDK always uses legacy mem mode in FreeBSD.
@@ -832,6 +840,9 @@ dpdk_cleanup(void)
 	if (!g_external_init) {
 		rte_eal_cleanup();
 	}
+	#ifdef RTE_ENABLE_DBCHECKER
+		dbchecker_module_exit_hook();
+	#endif
 }
 
 void

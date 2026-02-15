@@ -17,6 +17,29 @@
 
 #include "spdk_internal/trace_defs.h"
 
+#ifdef RTE_ENABLE_DBCHECKER
+#include "rte_dbchecker.h"
+
+#define DEV_ID 0
+
+enum dma_data_direction spdk_nvme_pcie_get_dir(uint16_t nvme_op)
+{
+	uint8_t dir_bits = (uint8_t)(nvme_op & 0x03);
+
+	switch (dir_bits) {
+		case 0x01: // 01b
+			return DMA_TO_DEVICE;
+		case 0x02: // 10b
+			return DMA_FROM_DEVICE;
+		case 0x03: // 11b
+			return DMA_BIDIRECTIONAL;
+		case 0x00: // 00b (No Data)
+		default:
+			return DMA_BIDIRECTIONAL;
+	}
+}
+#endif
+
 __thread struct nvme_pcie_ctrlr *g_thread_mmio_ctrlr = NULL;
 
 static struct spdk_nvme_pcie_stat g_dummy_stat = {};
@@ -201,6 +224,11 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 				return -EFAULT;
 			}
 		}
+		#ifdef RTE_ENABLE_DBCHECKER
+		pqpair->cmd_bus_addr = dbchecker_alloc_mtdt_generic(pqpair->cmd_bus_addr, queue_len,
+							     DMA_BIDIRECTIONAL, DEV_ID);
+		#endif
+		// printf("sq pa 0x%llx len 0x%llx\n", (unsigned long long)pqpair->cmd_bus_addr, (unsigned long long)queue_len);
 	}
 
 	if (pqpair->cq_vaddr) {
@@ -225,6 +253,11 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 			return -EFAULT;
 		}
 	}
+	#ifdef RTE_ENABLE_DBCHECKER
+	pqpair->cpl_bus_addr = dbchecker_alloc_mtdt_generic(pqpair->cpl_bus_addr, queue_len,
+						     DMA_BIDIRECTIONAL, DEV_ID);
+	#endif
+	// printf("cq pa 0x%llx, len 0x%llx\n", (unsigned long long)pqpair->cpl_bus_addr, (unsigned long long)queue_len);
 
 	pqpair->sq_tdbl = pctrlr->doorbell_base + (2 * qpair->id + 0) * pctrlr->doorbell_stride_u32;
 	pqpair->cq_hdbl = pctrlr->doorbell_base + (2 * qpair->id + 1) * pctrlr->doorbell_stride_u32;
@@ -739,6 +772,42 @@ nvme_pcie_qpair_complete_tracker(struct spdk_nvme_qpair *qpair, struct nvme_trac
 		TAILQ_REMOVE(&pqpair->outstanding_tr, tr, tq_list);
 		pqpair->qpair.queue_depth--;
 
+		/* dbchecker free mtdt hook start */
+		if (req->payload_size > 0) {
+			uint32_t page_size = qpair->ctrlr->page_size;
+			uint64_t prp1 = req->cmd.dptr.prp.prp1;
+			
+			// 1. 释放第一个 PRP (prp1 总是指向第一个数据块)
+			#ifdef RTE_ENABLE_DBCHECKER
+			dbchecker_free_mtdt_generic(prp1);
+			#endif
+			// printf("free prp1: 0x%llx\n", (unsigned long long)prp1);
+			// 2. 计算总共用了多少个 PRP
+			// 计算逻辑：(首页偏移 + 总长度 + 页大小 - 1) / 页大小
+			uint64_t offset = prp1 & (page_size - 1);
+			uint32_t num_prps = (offset + req->payload_size + page_size - 1) / page_size;
+
+			if (num_prps == 2) {
+				// 只有两个 PRP 时，第二个地址直接存在 cmd.dptr.prp.prp2
+				#ifdef RTE_ENABLE_DBCHECKER
+				dbchecker_free_mtdt_generic(req->cmd.dptr.prp.prp2);
+				#endif
+				// printf("free prp2: 0x%llx\n", (unsigned long long)req->cmd.dptr.prp.prp2);
+			} else if (num_prps > 2) {
+				// 超过两个 PRP 时，从第二个开始的地址都存在 tr->u.prp 数组里
+				// 注意：tr->u.prp[0] 其实是第 2 个 PRP，tr->u.prp[1] 是第 3 个...
+				#ifdef RTE_ENABLE_DBCHECKER
+				for (uint32_t i = 0; i < num_prps - 1; i++) {
+					dbchecker_free_mtdt_generic(tr->u.prp[i]);
+					// printf("free prp list entry %u: 0x%llx\n", i, (unsigned long long)tr->u.prp[i]);
+				}
+				dbchecker_free_mtdt_generic(req->cmd.dptr.prp.prp2);
+				#endif
+				// printf("free prp list base: 0x%llx\n", (unsigned long long)req->cmd.dptr.prp.prp2);
+			}
+		}
+		/* dbchecker free mtdt hook end */
+
 		/* Only check admin requests from different processes. */
 		if (nvme_qpair_is_admin_queue(qpair) && req->pid != getpid()) {
 			nvme_pcie_qpair_insert_pending_admin_request(qpair, req, cpl);
@@ -1041,9 +1110,17 @@ nvme_pcie_qpair_destroy(struct spdk_nvme_qpair *qpair)
 	 * Nor do we free it if it's in the CMB.
 	 */
 	if (!pqpair->sq_vaddr && pqpair->cmd && !pqpair->sq_in_cmb) {
+		#ifdef RTE_ENABLE_DBCHECKER
+		dbchecker_free_mtdt_generic(pqpair->cmd_bus_addr);
+		#endif
+		// printf("free sq pa 0x%llx\n", pqpair->cmd_bus_addr);
 		spdk_free(pqpair->cmd);
 	}
 	if (!pqpair->cq_vaddr && pqpair->cpl) {
+		#ifdef RTE_ENABLE_DBCHECKER
+		dbchecker_free_mtdt_generic(pqpair->cpl_bus_addr);
+		#endif
+		// printf("free cq pa 0x%llx\n", pqpair->cpl_bus_addr);
 		spdk_free(pqpair->cpl);
 	}
 	if (pqpair->tr) {
@@ -1269,8 +1346,14 @@ nvme_pcie_prp_list_append(struct spdk_nvme_ctrlr *ctrlr, struct nvme_tracker *tr
 
 		if (i == 0) {
 			NVME_QPAIR_DEBUGLOG(tr->req->qpair, "prp1 = %p\n", (void *)phys_addr);
-			cmd->dptr.prp.prp1 = phys_addr;
 			seg_len = page_size - ((uintptr_t)virt_addr & page_mask);
+			#ifdef RTE_ENABLE_DBCHECKER
+			cmd->dptr.prp.prp1 = dbchecker_alloc_mtdt_generic(phys_addr, seg_len, 
+				spdk_nvme_pcie_get_dir(tr->req->cmd.opc), DEV_ID);
+			#else
+			cmd->dptr.prp.prp1 = phys_addr;
+			#endif
+			// printf("prp1 pa 0x%llx\n", (unsigned long long)cmd->dptr.prp.prp1);
 		} else {
 			if ((phys_addr & page_mask) != 0) {
 				NVME_QPAIR_ERRLOG(tr->req->qpair, "PRP %u not page aligned (%p)\n", i, virt_addr);
@@ -1278,8 +1361,18 @@ nvme_pcie_prp_list_append(struct spdk_nvme_ctrlr *ctrlr, struct nvme_tracker *tr
 			}
 
 			NVME_QPAIR_DEBUGLOG(tr->req->qpair, "prp[%u] = %p\n", i - 1, (void *)phys_addr);
-			tr->u.prp[i - 1] = phys_addr;
 			seg_len = page_size;
+			#ifdef RTE_ENABLE_DBCHECKER
+			tr->u.prp[i - 1] = dbchecker_alloc_mtdt_generic(phys_addr, seg_len, 
+				spdk_nvme_pcie_get_dir(tr->req->cmd.opc), DEV_ID);
+			#else
+			tr->u.prp[i - 1] = phys_addr;
+			#endif
+			if (i == 1) {
+				// printf("prp2 pa 0x%llx\n", (unsigned long long)phys_addr);
+			} else {
+				// printf("prp list entry[%u] pa 0x%llx\n", i - 2, (unsigned long long)phys_addr);
+			}
 		}
 
 		seg_len = spdk_min(seg_len, len);
@@ -1295,7 +1388,14 @@ nvme_pcie_prp_list_append(struct spdk_nvme_ctrlr *ctrlr, struct nvme_tracker *tr
 		cmd->dptr.prp.prp2 = tr->u.prp[0];
 		NVME_QPAIR_DEBUGLOG(tr->req->qpair, "prp2 = %p\n", (void *)cmd->dptr.prp.prp2);
 	} else {
+		#ifdef RTE_ENABLE_DBCHECKER
+		cmd->dptr.prp.prp2 = dbchecker_alloc_mtdt_generic(tr->prp_sgl_bus_addr, 
+			i * sizeof(uint64_t), DMA_TO_DEVICE, DEV_ID);
+		#else
 		cmd->dptr.prp.prp2 = tr->prp_sgl_bus_addr;
+		#endif
+		// printf("prp2 (PRP list) pa 0x%llx len 0x%llx\n", 
+		//	(unsigned long long)cmd->dptr.prp.prp2, (unsigned long long)(i * sizeof(uint64_t)));
 		NVME_QPAIR_DEBUGLOG(tr->req->qpair, "prp2 = %p (PRP list)\n", (void *)cmd->dptr.prp.prp2);
 	}
 
