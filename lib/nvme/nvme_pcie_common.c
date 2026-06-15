@@ -225,8 +225,8 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 			}
 		}
 		#ifdef RTE_ENABLE_DBCHECKER
-		pqpair->cmd_bus_addr = dbchecker_alloc_mtdt_generic(pqpair->cmd_bus_addr, queue_len,
-							     DMA_BIDIRECTIONAL, DEV_ID);
+		pqpair->cmd_bus_addr = dbchecker_alloc_mtdt(pqpair->cmd_bus_addr, queue_len,
+							     DMA_BIDIRECTIONAL, DEV_ID, false);
 		#endif
 		// printf("sq pa 0x%llx len 0x%llx\n", (unsigned long long)pqpair->cmd_bus_addr, (unsigned long long)queue_len);
 	}
@@ -254,8 +254,8 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 		}
 	}
 	#ifdef RTE_ENABLE_DBCHECKER
-	pqpair->cpl_bus_addr = dbchecker_alloc_mtdt_generic(pqpair->cpl_bus_addr, queue_len,
-						     DMA_BIDIRECTIONAL, DEV_ID);
+	pqpair->cpl_bus_addr = dbchecker_alloc_mtdt(pqpair->cpl_bus_addr, queue_len,
+						     DMA_BIDIRECTIONAL, DEV_ID, false);
 	#endif
 	// printf("cq pa 0x%llx, len 0x%llx\n", (unsigned long long)pqpair->cpl_bus_addr, (unsigned long long)queue_len);
 
@@ -779,7 +779,7 @@ nvme_pcie_qpair_complete_tracker(struct spdk_nvme_qpair *qpair, struct nvme_trac
 			
 			// 1. 释放第一个 PRP (prp1 总是指向第一个数据块)
 			#ifdef RTE_ENABLE_DBCHECKER
-			dbchecker_free_mtdt_generic(prp1);
+			dbchecker_free_mtdt(prp1);
 			#endif
 			// printf("free prp1: 0x%llx\n", (unsigned long long)prp1);
 			// 2. 计算总共用了多少个 PRP
@@ -790,7 +790,7 @@ nvme_pcie_qpair_complete_tracker(struct spdk_nvme_qpair *qpair, struct nvme_trac
 			if (num_prps == 2) {
 				// 只有两个 PRP 时，第二个地址直接存在 cmd.dptr.prp.prp2
 				#ifdef RTE_ENABLE_DBCHECKER
-				dbchecker_free_mtdt_generic(req->cmd.dptr.prp.prp2);
+				dbchecker_free_mtdt(req->cmd.dptr.prp.prp2);
 				#endif
 				// printf("free prp2: 0x%llx\n", (unsigned long long)req->cmd.dptr.prp.prp2);
 			} else if (num_prps > 2) {
@@ -798,10 +798,10 @@ nvme_pcie_qpair_complete_tracker(struct spdk_nvme_qpair *qpair, struct nvme_trac
 				// 注意：tr->u.prp[0] 其实是第 2 个 PRP，tr->u.prp[1] 是第 3 个...
 				#ifdef RTE_ENABLE_DBCHECKER
 				for (uint32_t i = 0; i < num_prps - 1; i++) {
-					dbchecker_free_mtdt_generic(tr->u.prp[i]);
+					dbchecker_free_mtdt(tr->u.prp[i]);
 					// printf("free prp list entry %u: 0x%llx\n", i, (unsigned long long)tr->u.prp[i]);
 				}
-				dbchecker_free_mtdt_generic(req->cmd.dptr.prp.prp2);
+				dbchecker_free_mtdt(req->cmd.dptr.prp.prp2);
 				#endif
 				// printf("free prp list base: 0x%llx\n", (unsigned long long)req->cmd.dptr.prp.prp2);
 			}
@@ -1111,14 +1111,14 @@ nvme_pcie_qpair_destroy(struct spdk_nvme_qpair *qpair)
 	 */
 	if (!pqpair->sq_vaddr && pqpair->cmd && !pqpair->sq_in_cmb) {
 		#ifdef RTE_ENABLE_DBCHECKER
-		dbchecker_free_mtdt_generic(pqpair->cmd_bus_addr);
+		dbchecker_free_mtdt(pqpair->cmd_bus_addr);
 		#endif
 		// printf("free sq pa 0x%llx\n", pqpair->cmd_bus_addr);
 		spdk_free(pqpair->cmd);
 	}
 	if (!pqpair->cq_vaddr && pqpair->cpl) {
 		#ifdef RTE_ENABLE_DBCHECKER
-		dbchecker_free_mtdt_generic(pqpair->cpl_bus_addr);
+		dbchecker_free_mtdt(pqpair->cpl_bus_addr);
 		#endif
 		// printf("free cq pa 0x%llx\n", pqpair->cpl_bus_addr);
 		spdk_free(pqpair->cpl);
@@ -1348,8 +1348,8 @@ nvme_pcie_prp_list_append(struct spdk_nvme_ctrlr *ctrlr, struct nvme_tracker *tr
 			NVME_QPAIR_DEBUGLOG(tr->req->qpair, "prp1 = %p\n", (void *)phys_addr);
 			seg_len = page_size - ((uintptr_t)virt_addr & page_mask);
 			#ifdef RTE_ENABLE_DBCHECKER
-			cmd->dptr.prp.prp1 = dbchecker_alloc_mtdt_generic(phys_addr, seg_len, 
-				spdk_nvme_pcie_get_dir(tr->req->cmd.opc), DEV_ID);
+			cmd->dptr.prp.prp1 = dbchecker_alloc_mtdt(phys_addr, seg_len, 
+				spdk_nvme_pcie_get_dir(tr->req->cmd.opc), DEV_ID, true);
 			#else
 			cmd->dptr.prp.prp1 = phys_addr;
 			#endif
@@ -1363,8 +1363,8 @@ nvme_pcie_prp_list_append(struct spdk_nvme_ctrlr *ctrlr, struct nvme_tracker *tr
 			NVME_QPAIR_DEBUGLOG(tr->req->qpair, "prp[%u] = %p\n", i - 1, (void *)phys_addr);
 			seg_len = page_size;
 			#ifdef RTE_ENABLE_DBCHECKER
-			tr->u.prp[i - 1] = dbchecker_alloc_mtdt_generic(phys_addr, seg_len, 
-				spdk_nvme_pcie_get_dir(tr->req->cmd.opc), DEV_ID);
+			tr->u.prp[i - 1] = dbchecker_alloc_mtdt(phys_addr, seg_len, 
+				spdk_nvme_pcie_get_dir(tr->req->cmd.opc), DEV_ID, true);
 			#else
 			tr->u.prp[i - 1] = phys_addr;
 			#endif
@@ -1389,8 +1389,8 @@ nvme_pcie_prp_list_append(struct spdk_nvme_ctrlr *ctrlr, struct nvme_tracker *tr
 		NVME_QPAIR_DEBUGLOG(tr->req->qpair, "prp2 = %p\n", (void *)cmd->dptr.prp.prp2);
 	} else {
 		#ifdef RTE_ENABLE_DBCHECKER
-		cmd->dptr.prp.prp2 = dbchecker_alloc_mtdt_generic(tr->prp_sgl_bus_addr, 
-			i * sizeof(uint64_t), DMA_TO_DEVICE, DEV_ID);
+		cmd->dptr.prp.prp2 = dbchecker_alloc_mtdt(tr->prp_sgl_bus_addr,
+			i * sizeof(uint64_t), DMA_TO_DEVICE, DEV_ID, true);
 		#else
 		cmd->dptr.prp.prp2 = tr->prp_sgl_bus_addr;
 		#endif
